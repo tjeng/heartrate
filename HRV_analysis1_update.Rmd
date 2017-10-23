@@ -1,0 +1,213 @@
+---
+title: "HRV analysis"
+author: "Janice Tjeng"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+# Load packages
+```{r}
+library(RMySQL)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(RHRV) # for frequency analyses later
+```
+
+# Read data from E4, firstbeat, & MSband
+```{r}
+db <- dbConnect(MySQL(), user="deepresearcher", password="ctpc177!", dbname="deephealth2", host="deephealthlab.org")
+e4 <- dbSendQuery(db,"SELECT * FROM viewl_e4_rr")
+e4dat <- fetch(e4,n=-1) 
+fb <- dbSendQuery(db, "SELECT * FROM viewl_firstbeat_rr")
+fbdat <- fetch(fb, n=-1)
+mb <- dbSendQuery(db, "SELECT * FROM viewl_msband_rr")
+mbdat <- fetch(mb, n=-1)
+```
+
+# Read timing data
+```{r}
+timing <- read_csv("timing_data.csv")
+df <- timing %>%
+  select (Event, LWP2_0019, Activity) %>%
+  rename("Time"="LWP2_0019")
+n <- nrow(df)
+dte <- mdy(as.character(df[1,"Time"]))
+start <- as.character(df[2,"Time"])
+end <- as.character(df[n,"Time"])
+```
+
+# Select rows for user 19 from E4 
+```{r}
+user19_l <- e4dat %>%
+  filter(user=="lwp2_0019", device_location=="Left") %>% 
+  mutate(readable_timestamp=as.POSIXct(readable_timestamp),
+         e4_rr=e4_rr*1000) 
+filter_time_day1 <- user19_l %>%
+  filter(strftime(readable_timestamp, "%H:%M:%S") >= start & strftime(readable_timestamp, "%H:%M:%S") <= end, date(readable_timestamp)==dte) 
+```
+
+# Select rows for user 19 from ECG
+```{r}
+user19_fb <- fbdat %>%
+  filter(user=="lwp2_0019") %>% 
+  mutate(readable_timestamp=as.POSIXct(readable_timestamp)) 
+filter_time_day1_fb <- user19_fb %>%
+  filter(strftime(readable_timestamp, "%H:%M:%S") >= start & strftime(readable_timestamp, "%H:%M:%S") <= end, date(readable_timestamp)==dte) 
+```
+
+# Select rows for user 19 from MSband 
+```{r}
+user19_l_mb <- mbdat %>%
+  filter(user=="lwp2_0019", device_location=="Left") %>% 
+  mutate(readable_timestamp=as.POSIXct(readable_timestamp),
+         mb_rr=(mb_rr*1000)) 
+filter_time_day1_mb <- user19_l_mb %>%
+  filter(strftime(readable_timestamp, "%H:%M:%S") >= start & strftime(readable_timestamp, "%H:%M:%S") <= end, date(readable_timestamp)==dte) 
+```
+
+# Clean data
+
+## Detect outlier based on z-score standardization
+
+**E4**
+```{r}
+summary(filter_time_day1$e4_rr) # Summary statistic for e4_rr
+# Standardize funcyion
+standardize <- function(x){
+  return ((x-mean(x))/sd(x))
+}
+
+std_e4rr <- standardize(filter_time_day1$e4_rr)
+summary(std_e4rr) 
+# For E4 etect outlier based on more than +-3 standard deviations away from the mean because that is the standard and most of the data are within 3 std of the mean
+
+ind <- which(abs(std_e4rr)>=3) # Returns index of outlier
+
+# Replace outlier with the mean of neighboring e4_rr
+# x is the index, y is the column of e4_rr values
+replace_outlier <- function(x,y){
+  y[x] <- mean(c(y[x-1], y[x+1]))
+}
+
+filter_time_day1.clean <- filter_time_day1
+filter_time_day1.clean$e4_rr[ind]<- unlist(lapply(ind, filter_time_day1.clean$e4_rr, FUN=replace_outlier))
+
+# Plot
+ggplot(filter_time_day1.clean, aes(x=readable_timestamp, y=e4_rr)) + geom_line() +
+  ggtitle("Plot of rr-interval against time, after removing outliers, measured by E4 \non the left hand, during the first day of study, 2016-11- 15, for participant 19.") +
+  ylab("RR interval in milliseconds") + 
+  xlab("time")
+```
+
+**ECG**
+
+```{r}
+summary(filter_time_day1_fb$fb_rr)
+std_fbrr <- standardize(filter_time_day1_fb$fb_rr)
+summary(std_fbrr)
+# Detects outlier if they are more than 3 stdev from the mean, same rationale as E4
+ind_ECG <- which(abs(std_fbrr)>=3) # Returns index of outliers
+
+filter_time_day1_fb.clean <- filter_time_day1_fb
+filter_time_day1_fb.clean$fb_rr[ind_ECG]<- unlist(lapply(ind_ECG, filter_time_day1_fb.clean$fb_rr, FUN=replace_outlier))
+
+# Plot
+ggplot(filter_time_day1_fb.clean, aes(x=readable_timestamp, y=fb_rr)) + geom_line() +
+  ggtitle("Plot of rr-interval against time, after removign outliers, measured by ECG \nduring the first day of study, 2016-11- 15, for participant 19.") +
+  ylab("RR interval in milliseconds") + 
+  xlab("time")
+```
+**MSband**
+
+```{r}
+summary(filter_time_day1_mb$mb_rr)
+std_mbrr <- standardize(filter_time_day1_mb$mb_rr)
+summary(std_mbrr)
+# Detects outlier if they are more than 3 stdev from the mean, same rationale as E4
+
+ind_MB <- which(abs(std_mbrr)>=3) # Returns index of outliers
+
+filter_time_day1_mb.clean <- filter_time_day1_mb
+filter_time_day1_mb.clean$mb_rr[ind_MB]<- unlist(lapply(ind_MB, filter_time_day1_mb.clean$mb_rr, FUN=replace_outlier))
+
+# Plot
+ggplot(filter_time_day1_mb.clean, aes(x=readable_timestamp, y=mb_rr)) + geom_line() +
+  ggtitle("Plot of rr-interval against time, after removing outliers, measured by MSband \non the left hand during the first day of study, 2016-11- 15, for participant 19.") +
+  ylab("RR interval in milliseconds") + 
+  xlab("time")
+```
+
+# RMSSD equation
+```{r}
+# x should be the column containing rr-interval, units in millisecond
+HRV <- function(x){
+  total <- 0
+  for (i in 1:(length(x)-1)){
+     total <- sum(total, (x[i+1] -x[i])^2)
+  }
+  return (sqrt(total/(length(x)-1)))
+}
+```
+
+# Select each period and calculate RMSSD for E4, fb, and MSband
+```{r}
+for (i in 3:(n-1)){
+  # select rr-interval for E4
+  rr_int_e4 <- filter_time_day1.clean %>%
+    filter(strftime(readable_timestamp, "%H:%M")>=df$Time[i] & strftime(readable_timestamp, "%H:%M") <df$Time[i+1])
+  # select rr-interval for firstbeat
+  rr_int_fb <- filter_time_day1_fb.clean %>%
+  filter(strftime(readable_timestamp, "%H:%M")>=df$Time[i] & strftime(readable_timestamp, "%H:%M") < df$Time[i+1])
+  # select rr-interval for MSband
+  rr_int_mb <- filter_time_day1_mb.clean %>%
+  filter(strftime(readable_timestamp, "%H:%M")>=df$Time[i] & strftime(readable_timestamp, "%H:%M") < df$Time[i+1])
+  # calculate RMSSD for each e4 interval
+  df$RMSSD_e4[i] <- HRV(rr_int_e4$e4_rr)
+  # calculate RMSSD for each firstbeat interval
+  df$RMSSD_fb[i] <- HRV(rr_int_fb$fb_rr)
+  # calculate RMSSD for each firstbeat interval
+  df$RMSSD_mb[i] <- HRV(rr_int_mb$mb_rr)
+}
+df$RMSSD_e4[n] <- NA
+df$RMSSD_fb[n] <- NA
+df$RMSSD_mb[n] <- NA
+
+df #output
+```
+
+# Plot HRV over different periods for each device
+
+```{r}
+hrv_df <- df %>%
+  slice(3:20) %>%
+  gather(`RMSSD_e4`, `RMSSD_fb`, `RMSSD_mb`, key="Device", value="RMSSD") %>%
+  mutate(Device=str_replace(Device, "^.*_", ""),
+         Event=factor(Event, levels=df$Event[3:20]))
+
+clr <- c("blue", "green", "purple", "red", "black", "purple", "blue", "green", "purple", "orange", "blue", "gray", "purple", "yellow", "pink", "black", "purple", "violet")
+ggplot(hrv_df, aes(x=Event, y=RMSSD)) +
+  geom_path(aes(group=Device)) +
+  geom_point(aes(colour=Event)) +
+  #facet_wrap(~Device) +
+  #coord_flip() + 
+  scale_colour_manual(values=clr, 
+                      labels=paste(hrv_df$Event,hrv_df$Activity, sep=":"),
+                      name=NULL) +
+  annotate(geom="text", x=1, y=50, label="E4") +
+  annotate(geom="text", x=1, y=30, label="ECG") +
+  annotate(geom="text", x=1, y=100, label="MSB") +
+  ggtitle("Plot of RMSSD across events for each device") +
+  ylab("RMSSD in milliseconds") +
+  theme(legend.position="top", 
+        legend.text=element_text(size=7)) 
+```
+
+# Plot HRV across time window of 3min + 30s each, for E4. Working on function to increment by 30s. 
+```{r}
+
+```
