@@ -15,7 +15,6 @@ library(RMySQL)
 library(tidyverse)
 library(lubridate)
 library(stringr)
-library(RHRV) # for frequency analyses later
 ```
 
 # Read data from E4, firstbeat, & MSband
@@ -47,7 +46,7 @@ user19_l <- e4dat %>%
   filter(user=="lwp2_0019", device_location=="Left") %>% 
   mutate(readable_timestamp=as.POSIXct(readable_timestamp),
          e4_rr=e4_rr*1000) 
-filter_time_day1 <- user19_l %>%
+filter_time_day1_e4 <- user19_l %>%
   filter(strftime(readable_timestamp, "%H:%M:%S") >= start & strftime(readable_timestamp, "%H:%M:%S") <= end, date(readable_timestamp)==dte) 
 ```
 
@@ -72,33 +71,76 @@ filter_time_day1_mb <- user19_l_mb %>%
 
 # Clean data
 
-## Detect outlier based on z-score standardization
+## Detect outlier, short RR-interval, based on z-score standardization. 
+
+```{r}
+# Standardize function, standard deviation based on median absolute deviation, a robust estimate of standard deviation
+standardize <- function(rr){
+  return ((rr-mean(rr))/mad(rr))
+}
+
+# Function to identify outlier
+outlier_short <- function(rr){
+  z <- standardize(rr)
+  ind <- which(z<(-3)) # -3: limit in sd for outlier detection of short rr interval
+  return (ind)
+}
+
+# Function to remove outlier, then add to subsequent beat
+rm_short <- function(x,y){ # x is the index of outliers, y is the column of rr-interval
+  for (i in 1:length(x)){
+    if (y[x[i]]<length(y)){
+      y[x[i]+1] <- y[x[i]+1] + y[x[i]]
+      y[x[i]] <- NA
+    }
+    else{  # if rr-interval is at the end of the array, just remove it without adding it to the next beat
+      y[x[i]] <- NA
+    }
+  }
+  return (y)
+}
+
+# Combine all functions
+rm_short_comp <- function (rr){
+  indx <- outlier_short(rr)
+  clean <- rm_short(indx,rr)
+  return (clean)
+}
+```
+
+## Impute long rr-interval (Still working to optimize function)
+
+```{r}
+# Identiy long rr-interval
+impute_long <- function(rr){
+  dmax <- (2*mad(rr)) + mean(rr)
+  dp <- numeric()
+  dp1 <- numeric()
+  ind_long <- which(rr>dmax)
+  for (i in 1:length(ind_long)){
+    dp <- sum((rr[ind_long][i]-dmax), dp)
+  }
+  dp <- dp/length(ind_long)
+  rr[ind_long][i] <- rr[ind_long][i]-dp
+  for (i in 1:length(rr[-ind_long])){
+    dp1 <- sum((rr[-ind_long][i]-dmax), dp1)
+  }
+  dp1 <- dp1/length(rr[-ind_long])
+  rr[-ind_long][i] <- rr[-ind_long][i]-dp1
+  return (rr)
+}
+
+
+```
+
 
 **E4**
 ```{r}
-summary(filter_time_day1$e4_rr) # Summary statistic for e4_rr
-# Standardize funcyion
-standardize <- function(x){
-  return ((x-mean(x))/sd(x))
-}
-
-std_e4rr <- standardize(filter_time_day1$e4_rr)
-summary(std_e4rr) 
-# For E4 etect outlier based on more than +-3 standard deviations away from the mean because that is the standard and most of the data are within 3 std of the mean
-
-ind <- which(abs(std_e4rr)>=3) # Returns index of outlier
-
-# Replace outlier with the mean of neighboring e4_rr
-# x is the index, y is the column of e4_rr values
-replace_outlier <- function(x,y){
-  y[x] <- mean(c(y[x-1], y[x+1]))
-}
-
-filter_time_day1.clean <- filter_time_day1
-filter_time_day1.clean$e4_rr[ind]<- unlist(lapply(ind, filter_time_day1.clean$e4_rr, FUN=replace_outlier))
+filter_time_day1_e4.clean <- filter_time_day1_e4 %>%
+  mutate(e4_rr=rm_short_comp(e4_rr))
 
 # Plot
-ggplot(filter_time_day1.clean, aes(x=readable_timestamp, y=e4_rr)) + geom_line() +
+ggplot(filter_time_day1_e4.clean, aes(x=readable_timestamp, y=e4_rr)) + geom_line() +
   ggtitle("Plot of rr-interval against time, after removing outliers, measured by E4 \non the left hand, during the first day of study, 2016-11- 15, for participant 19.") +
   ylab("RR interval in milliseconds") + 
   xlab("time")
@@ -107,33 +149,20 @@ ggplot(filter_time_day1.clean, aes(x=readable_timestamp, y=e4_rr)) + geom_line()
 **ECG**
 
 ```{r}
-summary(filter_time_day1_fb$fb_rr)
-std_fbrr <- standardize(filter_time_day1_fb$fb_rr)
-summary(std_fbrr)
-# Detects outlier if they are more than 3 stdev from the mean, same rationale as E4
-ind_ECG <- which(abs(std_fbrr)>=3) # Returns index of outliers
-
-filter_time_day1_fb.clean <- filter_time_day1_fb
-filter_time_day1_fb.clean$fb_rr[ind_ECG]<- unlist(lapply(ind_ECG, filter_time_day1_fb.clean$fb_rr, FUN=replace_outlier))
+filter_time_day1_fb.clean <- filter_time_day1_fb %>%
+  mutate(fb_rr=rm_short_comp(fb_rr))
 
 # Plot
 ggplot(filter_time_day1_fb.clean, aes(x=readable_timestamp, y=fb_rr)) + geom_line() +
-  ggtitle("Plot of rr-interval against time, after removign outliers, measured by ECG \nduring the first day of study, 2016-11- 15, for participant 19.") +
+  ggtitle("Plot of rr-interval against time, after removing outliers, measured by ECG \nduring the first day of study, 2016-11- 15, for participant 19.") +
   ylab("RR interval in milliseconds") + 
   xlab("time")
 ```
 **MSband**
 
 ```{r}
-summary(filter_time_day1_mb$mb_rr)
-std_mbrr <- standardize(filter_time_day1_mb$mb_rr)
-summary(std_mbrr)
-# Detects outlier if they are more than 3 stdev from the mean, same rationale as E4
-
-ind_MB <- which(abs(std_mbrr)>=3) # Returns index of outliers
-
-filter_time_day1_mb.clean <- filter_time_day1_mb
-filter_time_day1_mb.clean$mb_rr[ind_MB]<- unlist(lapply(ind_MB, filter_time_day1_mb.clean$mb_rr, FUN=replace_outlier))
+filter_time_day1_mb.clean <- filter_time_day1_mb %>%
+  mutate(mb_rr=rm_short_comp(mb_rr))
 
 # Plot
 ggplot(filter_time_day1_mb.clean, aes(x=readable_timestamp, y=mb_rr)) + geom_line() +
@@ -148,7 +177,7 @@ ggplot(filter_time_day1_mb.clean, aes(x=readable_timestamp, y=mb_rr)) + geom_lin
 HRV <- function(x){
   total <- 0
   for (i in 1:(length(x)-1)){
-     total <- sum(total, (x[i+1] -x[i])^2)
+     total <- sum(total, (x[i+1] -x[i])^2, na.rm=T)
   }
   return (sqrt(total/(length(x)-1)))
 }
@@ -158,7 +187,7 @@ HRV <- function(x){
 ```{r}
 for (i in 3:(n-1)){
   # select rr-interval for E4
-  rr_int_e4 <- filter_time_day1.clean %>%
+  rr_int_e4 <- filter_time_day1_e4.clean %>%
     filter(strftime(readable_timestamp, "%H:%M")>=df$Time[i] & strftime(readable_timestamp, "%H:%M") <df$Time[i+1])
   # select rr-interval for firstbeat
   rr_int_fb <- filter_time_day1_fb.clean %>%
