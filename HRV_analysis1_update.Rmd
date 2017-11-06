@@ -160,6 +160,8 @@ ggplot(filter_time_day1_fb.clean, aes(x=readable_timestamp, y=fb_rr)) + geom_lin
   xlab("time")
 ```
 
+Huge spike of ECG at, 14:19:58, >37,000ms. This is due to remove previous short rr-intervals (rows 4081-4177) and adding it to the rr-interval at row 4178. 
+
 **MSband**
 
 ```{r}
@@ -240,7 +242,57 @@ ggplot(hrv_df, aes(x=Event, y=RMSSD)) +
         axis.text.x = element_text(angle = 90, hjust = 1)) 
 ```
 
-# Plot HRV across time window of 3min + 30s each, for E4. Working on function to increment by 30s. 
+# Implement timing, 3 min + 30s 
 ```{r}
+time <- hms(start) + minutes(3)
+timings <- c(as.character(hms(start)),vector())
+while (as.character(time)<(hms(end)-seconds(30))){
+  timings <- c(timings, as.character(seconds_to_period(period_to_seconds(time)+seconds(30))))
+  time <- seconds_to_period(period_to_seconds(time)+seconds(30))
+}
+timings <- c(timings, as.character(hms(end)))
+for (i in 1:length(timings)){
+  timings[i]<- ifelse(nchar(timings)[i]<11,
+                      paste(substr(timings[i],1,3)," 0", substr(timings[i],5,nchar(timings[i])), sep=""),
+                      timings[i])
+  # Add zeros in between minutes for some timings
+}
+timings <- substr(str_replace_all(timings, "\\D\\s", ":"),1,8) # Replace HMS with semicolon for comparison of timing
+timings
+df_window <- data.frame(time=timings) %>%
+  mutate(time=as.character(time))
+for (i in 1:(nrow(df_window)-1)){
+  # select rr-interval for E4
+  e4 <- filter_time_day1_e4.clean %>%
+    filter(strftime(readable_timestamp, "%H:%M:%S")>=df_window$time[i] & strftime(readable_timestamp, "%H:%M:%S") <df_window$time[i+1])
+  # select rr-interval for firstbeat
+  fb <- filter_time_day1_fb.clean %>%
+  filter(strftime(readable_timestamp, "%H:%M:%S")>=df_window$time[i] & strftime(readable_timestamp, "%H:%M:%S") < df_window$time[i+1])
+  # select rr-interval for MSband
+  mb <- filter_time_day1_mb.clean %>%
+  filter(strftime(readable_timestamp, "%H:%M:%S")>=df_window$time[i] & strftime(readable_timestamp, "%H:%M:%S") < df_window$time[i+1])
+  # calculate RMSSD for each e4 interval
+  df_window$RMSSD_e4[i] <- HRV(e4$e4_rr)
+  # calculate RMSSD for each firstbeat interval
+  df_window$RMSSD_fb[i] <- HRV(fb$fb_rr)
+  # calculate RMSSD for each firstbeat interval
+  df_window$RMSSD_mb[i] <- HRV(mb$mb_rr)
+}
 
+df_window$RMSSD_e4[146] <- 0
+df_window
+```
+
+Zeros or NaN in between indicate that there isn't any value for certain timings
+
+# Plot HRV across timing
+```{r}
+df_window1 <- df_window %>%
+   gather(`RMSSD_e4`, `RMSSD_fb`, `RMSSD_mb`, key="Device", value="RMSSD") %>%
+   mutate(Device=str_replace(Device, "^.*_", ""))
+head(df_window1)
+
+ggplot(df_window1, aes(x=time,y=RMSSD)) +
+  geom_path(aes(group=Device)) +
+  facet_wrap(~Device) 
 ```
