@@ -5,7 +5,7 @@ Input: data consisting of rr-interval and time
 Clean data 
 1. Remove short interval and add it to the subsequent interval
 2. Impute long interval
-3. Implement SSA to smooth irregularities 
+3. Implement SSA to smooth irregularities and reconstruct function of heart rate over time
 
 Analysis
 1. Time domain (RMSSD)
