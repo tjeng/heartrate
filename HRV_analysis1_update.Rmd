@@ -13,10 +13,10 @@ knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
 ```{r}
 library(RMySQL)
 library(tidyverse)
-library(lubridate)
-library(robustbase)
-library(stringr)
-library(Rssa)
+library(lubridate) # for manipulating date/time objects
+library(robustbase) # for robust covariance estimate
+library(stringr) # for manipulating regular expressions
+library(Rssa) 
 ```
 
 # Read data from E4, firstbeat, & MSband
@@ -76,9 +76,9 @@ filter_time_day1_mb <- user19_l_mb %>%
 ## Detect outlier, short RR-interval, based on z-score standardization. 
 
 ```{r}
-# Standardize function, standard deviation based on median absolute deviation, a robust estimate of standard deviation
+# Standardize function. Standard deviation based on robust covariance estimate
 standardize <- function(rr){
-  return ((rr-mean(rr))/sqrt(covMcd(rr)$cov[1])) # use robust covariance estimate
+  return ((rr-mean(rr))/sqrt(covMcd(rr)$cov[1])) # robust covariance estimate from covMcd function, robustbase package 
 }
 
 # Function to identify outlier
@@ -112,6 +112,7 @@ rm_short_comp <- function (rr){
 
 ## Impute long rr-interval, applied after removing short
 ```{r}
+# Function to impute long rr-intervals
 impute_long <- function(rr){ 
   dmax <- mean(rr) + (2*sqrt(covMcd(rr)$cov[1]))
   dp <- numeric()
@@ -130,6 +131,7 @@ impute_long <- function(rr){
   return (rr)
 }
 
+# Iterate each rr-interval and expand window. Apply impute_long function when average of window is less than or equal to dmax
 window_impute_long <- function(rr){
   k <- 1
   dmax <- mean(rr) + (2*sqrt(covMcd(rr)$cov[1]))
@@ -144,7 +146,7 @@ window_impute_long <- function(rr){
 }
 ```
 
-## SSA cleaning based on the following links
+## SSA cleaning based on the following links:
 
 https://www.r-bloggers.com/wheres-the-magic-emd-and-ssa-in-r/
 
@@ -171,30 +173,33 @@ reconstructed_rr <- function(residuals, reconstruct, original){
 }
 ```
 
-**E4**
+# Apply algorithms to clean rr-interval, then apply SSA, for each device
+
+## E4
 ```{r}
 filter_time_day1_e4.clean <- filter_time_day1_e4 %>%
   mutate(e4_rr=rm_short_comp(e4_rr)) %>%
   filter(!is.na(e4_rr)) %>%
   mutate(e4_rr=window_impute_long(e4_rr))
-# 1st stage decomposition
-e4.ssa <- ssa(L=15, x=filter_time_day1_e4.clean$e4_rr, kind="toeplitz-ssa", svd.method = "svd")
-summary(e4.ssa)
-# 1st stage visual information for grouping
-plot(e4.ssa) # scree plot of singular values to identify trends and pairings.  
-# plot(e4.ssa, "series", groups=as.list(1:4)) # Reconstructed time series for first few components/projections
-# 1st stage reconstruction
-# plot(e4.ssa, type="paired") #3&4, 5&6
-res1 <- reconstruct(e4.ssa, groups=list(Tr=1:4)) # choose first 4 trend/components to produce Poncaire's plot
-plot(res1, add.residuals=F) # Reconstructed series of the trend
-res.trend <- residuals(res1) # Extract residuals, original values-predicted values
-# spec.pgram(res.trend, detrend=F, log="no") # Periodogram, detect seasonality, should correspond to sine waves in paired plot
 
+# SSA: 1st stage decomposition
+e4.ssa <- ssa(L=15, x=filter_time_day1_e4.clean$e4_rr, kind="toeplitz-ssa", svd.method = "svd") # window, L=15
+# summary(e4.ssa)
+
+# 1st stage visual information for grouping
+# plot(e4.ssa) # scree plot of singular values to identify trends and pairings
+
+# 1st stage reconstruction
+res1 <- reconstruct(e4.ssa, groups=list(Tr=1:4)) # choose first 4 trend/components to produce Poncaire's plot
+res.trend <- residuals(res1) # Extract residuals, original values-predicted values
+# spec.pgram(res.trend, detrend=F, log="no") # Periodogram, detect seasonality. Unit of x-axis in Hz,y-axis represents power spectral density
+
+# Apply formula that uses reconstructed value if residuals>0.5
 e4_reconstructed <- reconstructed_rr(res.trend, res1$Tr, filter_time_day1_e4.clean$e4_rr) 
 
 # Original plot
 ggplot(filter_time_day1_e4.clean, aes(x=readable_timestamp, y=e4_rr)) + geom_line(color="salmon") +
-  ggtitle("Plot of rr-interval against time, after removing outliers, \nmeasured by E4 on the left hand, \non first day of study, 2016-11- 15, for participant 19.") +
+  ggtitle("Plot of original rr-interval against time, after removing outliers, \nmeasured by E4 on the left hand, \non first day of study, 2016-11- 15, for participant 19.") +
   ylab("RR interval in milliseconds") + 
   xlab("Time")
 
@@ -208,33 +213,32 @@ df_e4 %>%
   ylab("RR-interval in ms")
 
 # Reconstructed plot
-ggplot(df_e4, aes(x=Time, y=Reconstructed)) + geom_line(color="mediumturquoise") + ylab("Reconstructed RR-interval in ms") 
+ggplot(df_e4, aes(x=Time, y=Reconstructed)) + geom_line(color="mediumturquoise") + ylab("Reconstructed RR-interval in ms") + ggtitle("Reconstructed rr-interval for E4")
 ```
 
-**ECG**
+## ECG/FirstBeat
 
 ```{r}
 filter_time_day1_fb.clean <- filter_time_day1_fb %>%
   mutate(fb_rr=rm_short_comp(fb_rr)) %>%
   filter(!is.na(fb_rr)) %>%
   mutate(fb_rr=window_impute_long(fb_rr))
+
 fb.ssa <- ssa(L=15, x=filter_time_day1_fb.clean$fb_rr,  kind="toeplitz-ssa", svd.method = "svd")
-plot(fb.ssa) # Trends at 1 & 42
-# plot(fb.ssa, type="paired") #3&4, 5&6, 6&7 
+# plot(fb.ssa) 
 fb_res <- reconstruct(fb.ssa, group=list(Tr=c(1:4)))
-plot(fb_res, add.residuals=F)
-
 res.trend.fb <- residuals(fb_res) # Extract seasonality from residuals, original values-predicted values
-# spec.pgram(res.trend.fb, detrend=F, log="no") # Periodogram, detect seasonality, should correspond to sine waves in paired plot
+# spec.pgram(res.trend.fb, detrend=F, log="no") 
 
+# Apply formula that uses reconstructed value if residuals>0.5
 fb_reconstructed <- reconstructed_rr(res.trend.fb, fb_res$Tr, filter_time_day1_fb.clean$fb_rr) 
 
 # Original Plot
 ggplot(filter_time_day1_fb.clean, aes(x=readable_timestamp, y=fb_rr)) + geom_line(color="salmon") +
-  ylab("RR interval in ms") + xlab("Time")
-  # ggtitle("Plot of rr-interval against time, after removing outliers, \nmeasured by ECG during the first day of study, \n2016-11- 15, for participant 19.") +
-  # ylab("RR interval in milliseconds") + 
-  # xlab("time")
+  ylab("RR interval in ms") + xlab("Time") +
+  ggtitle("Plot of original rr-interval against time for first segment, after removing outliers, \nmeasured by FirstBeat during the first day of study, \n2016-11- 15, for participant 19.") +
+  ylab("RR interval in milliseconds") +
+  xlab("time")
 
 df_fb <- data.frame(Reconstructed=fb_reconstructed$RR, Original=filter_time_day1_fb.clean$fb_rr, Time=filter_time_day1_fb.clean$readable_timestamp)
 
@@ -244,14 +248,38 @@ df_fb %>%
   ggplot(aes(x=Time, y=`RR-interval`)) +
   geom_line(aes(colour=Type)) +
   ylab("RR-interval in ms")
+# Huge spike of ECG at, 14:19:58, >37,000ms. This is due to removal of previous short rr-intervals (rows 4081-4177) and adding it to the rr-interval at row 4081. 
 
 # Reconstructed plot
-ggplot(df_fb, aes(x=Time, y=Reconstructed)) + geom_line(colour="mediumturquoise") + ylab("Reconstructed RR-interval in ms") + xlab("Time")
+ggplot(df_fb, aes(x=Time, y=Reconstructed)) + geom_line(colour="mediumturquoise") + ylab("Reconstructed RR-interval in ms") + xlab("Time") + ggtitle("Reconstructed rr-interval for FirstBeat")
 ```
 
-Huge spike of ECG at, 14:19:58, >37,000ms. This is due to removal of previous short rr-intervals (rows 4081-4177) and adding it to the rr-interval at row 4178. 
+Instead of L=15, use L=N/2, to get rid of huge upward spike for FirstBeat.
 
-**MSband**
+```{r}
+fb.ssa1 <- ssa(x=filter_time_day1_fb.clean$fb_rr,  kind="toeplitz-ssa", svd.method = "svd")
+plot(fb.ssa1) # Trends at 1&2, 42&43
+plot(fb.ssa1, "paired") # Pairings at 3&4, 6&7, 9&10
+fb_res1 <- reconstruct(fb.ssa1, group=list(Tr=1:4))
+res.fb <- residuals(fb_res1)
+
+# Apply formula that uses reconstructed value if residuals>0.5
+fb_reconstructed1 <- reconstructed_rr(res.fb, fb_res1$Tr, filter_time_day1_fb.clean$fb_rr) 
+
+df_fb1 <- data.frame(Reconstructed=fb_reconstructed1$RR, Original=filter_time_day1_fb.clean$fb_rr, Time=filter_time_day1_fb.clean$readable_timestamp)
+
+# Reconstructed and original plot combined
+df_fb1 %>%
+  gather(Reconstructed, Original, key="Type", value="RR-interval") %>%
+  ggplot(aes(x=Time, y=`RR-interval`)) +
+  geom_line(aes(colour=Type)) +
+  ylab("RR-interval in ms")
+
+# Reconstructed plot
+ggplot(df_fb1, aes(x=Time, y=Reconstructed)) + geom_line(colour="mediumturquoise") + ylab("Reconstructed RR-interval in ms") + xlab("Time") + ggtitle("Reconstructed rr-interval for FirstBeat")
+```
+
+## MSband
 
 ```{r}
 filter_time_day1_mb.clean <- filter_time_day1_mb %>%
@@ -260,18 +288,17 @@ filter_time_day1_mb.clean <- filter_time_day1_mb %>%
   mutate(mb_rr=window_impute_long(mb_rr))
 
 mb.ssa <- ssa(L=15, x=filter_time_day1_mb.clean$mb_rr,  kind="toeplitz-ssa", svd.method = "svd")
-plot(mb.ssa) # Trends at 1 & 3
-# plot(mb.ssa, type="paired") # 3&4, 5&6, 8&9
+# plot(mb.ssa)
 mb_res <- reconstruct(mb.ssa, group=list(Tr=c(1:4)))
-# plot(mb_res, add.residuals=F)
 res.trend.mb <- residuals(mb_res) # Extract seasonality from residuals, original values-predicted values
-spec.pgram(res.trend.mb, detrend=F, log="no") # Periodogram, detect seasonality, should correspond to sine waves in paired plot
+# spec.pgram(res.trend.mb, detrend=F, log="no") 
 
+# Apply formula that uses reconstructed value if residuals>0.5
 mb_reconstructed <- reconstructed_rr(res.trend.mb, mb_res$Tr, filter_time_day1_mb.clean$mb_rr) 
 
 # Original Plot
 ggplot(filter_time_day1_mb.clean, aes(x=readable_timestamp, y=mb_rr)) + geom_line(color="salmon") +
-  ggtitle("Plot of rr-interval against time, after removing outliers, \nmeasured by MSband on the left hand, \non first day of study, 2016-11- 15, for participant 19.") +
+  ggtitle("Plot of original rr-interval against time, after removing outliers, \nmeasured by MSband on the left hand, \non first day of study, 2016-11- 15, for participant 19.") +
   ylab("RR interval in milliseconds") + 
   xlab("time")
 
@@ -288,7 +315,10 @@ df_mb %>%
 ggplot(df_mb, aes(x=Time, y=Reconstructed)) + geom_line(colour="mediumturquoise") + ylab("Reconstructed RR-interval in ms")
 ```
 
-# RMSSD equation
+# Analyze HRV via the time domain, RMSSD, most relevant and accurate measure of autonomic nervous system (ANS) over the short-term
+
+RMSSD is a time series measure of HRV, associated with short-term rapid changes in heart rate, and correlated with vagus-mediated (parasympathetic) components of HRV (DeGiorgio et al 2011). Low RMSSD values indicate poor vagus mediated HRV. Reduced HRV is a biomarker for mortality and sudden death in heart disease, and is correlated with stress. 
+
 ```{r}
 # x should be the column containing rr-interval, units in millisecond
 HRV <- function(x){
@@ -300,7 +330,7 @@ HRV <- function(x){
 }
 ```
 
-# Select each period and calculate RMSSD for E4, fb, and MSband
+# Select each period and calculate RMSSD for E4, fb, and MSband. Fb has 2 versions, one with L=15, and one with L=N/2.
 ```{r}
 for (i in 3:(n-1)){
   # select time for rr-interval 
@@ -308,26 +338,30 @@ for (i in 3:(n-1)){
     filter(strftime(Time, "%H:%M")>=df$Time[i] & strftime(Time, "%H:%M") <df$Time[i+1])
   rr_int_fb <- df_fb %>%
     filter(strftime(Time, "%H:%M")>=df$Time[i] & strftime(Time, "%H:%M") < df$Time[i+1])
+  rr_int_fb1 <- df_fb1 %>%
+    filter(strftime(Time, "%H:%M")>=df$Time[i] & strftime(Time, "%H:%M") < df$Time[i+1])
   rr_int_mb <- df_mb %>%
     filter(strftime(Time, "%H:%M")>=df$Time[i] & strftime(Time, "%H:%M") < df$Time[i+1])
   # calculate RMSSD for each rr interval according to time
   df$RMSSD_e4[i] <- HRV(rr_int_e4$Reconstructed)
   df$RMSSD_fb[i] <- HRV(rr_int_fb$Reconstructed)
+  df$RMSSD_fb1[i] <- HRV(rr_int_fb1$Reconstructed)
   df$RMSSD_mb[i] <- HRV(rr_int_mb$Reconstructed)
 }
 df$RMSSD_e4[n] <- NA
 df$RMSSD_fb[n] <- NA
+df$RMSSD_fb1[n] <- NA
 df$RMSSD_mb[n] <- NA
 
 df #output
 ```
 
-# Plot HRV over different periods for each device
+# Plot HRV over different periods of stress and relaxation, during the study, for each device
 
 ```{r}
 hrv_df <- df %>%
   slice(3:20) %>%
-  gather(`RMSSD_e4`, `RMSSD_fb`, `RMSSD_mb`, key="Device", value="RMSSD") %>%
+  gather(`RMSSD_e4`, `RMSSD_fb`, `RMSSD_fb1`,`RMSSD_mb`, key="Device", value="RMSSD") %>%
   mutate(Device=str_replace(Device, "^.*_", ""),
          Event=factor(Event, levels=df$Event[3:20]))
 
@@ -339,20 +373,12 @@ ggplot(hrv_df, aes(x=Event, y=RMSSD)) +
   scale_colour_manual(values=clr, 
                       labels=paste(hrv_df$Event,hrv_df$Activity, sep=":"),
                       name=NULL) +
-  #annotate(geom="text", x=1, y=50, label="E4") +
-  #annotate(geom="text", x=1, y=30, label="ECG") +
-  #annotate(geom="text", x=1, y=100, label="MSB") +
   ggtitle("Plot of RMSSD across events for each device") +
   ylab("RMSSD in ms") +
   theme(legend.position="top", 
         legend.text=element_text(size=7),
         axis.text.x = element_text(angle = 90, hjust = 1)) 
 ```
-# Analyze HRV via the time domain, RMSSD, most relevant and accurate measure of ANS over the short-term
-
-RMSSD is a time series measure of HRV, associated with short-term rapid changes in heart rate, and correlated with vagus-mediated (parasympathetic) components of HRV (DeGiorgio et al 2011). Low RMSSD values indicate poor vagus mediated HRV. Reduced HRV is a biomarker for mortality and sudden death in heart disease, and is correlated with stress. 
-
-RMSSD is correlated with HF, both are measures of parasympathetic activity.
 
 # Implement timing, 3 min + 30s 
 ```{r}
@@ -379,11 +405,14 @@ for (i in 1:(nrow(df_window)-1)){
     filter(strftime(Time, "%H:%M:%S")>=df_window$time[i] & strftime(Time, "%H:%M:%S") <df_window$time[i+1])
   fb <- df_fb %>%
   filter(strftime(Time, "%H:%M:%S")>=df_window$time[i] & strftime(Time, "%H:%M:%S") < df_window$time[i+1])
+  fb1 <- df_fb1 %>%
+  filter(strftime(Time, "%H:%M:%S")>=df_window$time[i] & strftime(Time, "%H:%M:%S") < df_window$time[i+1])
   mb <- df_mb %>%
   filter(strftime(Time, "%H:%M:%S")>=df_window$time[i] & strftime(Time, "%H:%M:%S") < df_window$time[i+1])
   # calculate RMSSD for each time interval
   df_window$RMSSD_e4[i] <- HRV(e4$Reconstructed)
   df_window$RMSSD_fb[i] <- HRV(fb$Reconstructed)
+  df_window$RMSSD_fb1[i] <- HRV(fb1$Reconstructed)
   df_window$RMSSD_mb[i] <- HRV(mb$Reconstructed)
 }
 
@@ -391,18 +420,19 @@ head(df_window)
 tail(df_window)
 ```
 
-Zeros or NaN in between indicate that there isn't any value for certain timings
+Zeros or NaN in between indicate that there isn't any value for certain timings.
 
-# Plot HRV across timing
+# Plot RMSSD across continuous timings
 ```{r}
 df_window1 <- df_window %>%
-   gather(`RMSSD_e4`, `RMSSD_fb`, `RMSSD_mb`, key="Device", value="RMSSD") %>%
+   gather(`RMSSD_e4`, `RMSSD_fb`,`RMSSD_fb1`, `RMSSD_mb`, key="Device", value="RMSSD") %>%
    mutate(Device=str_replace(Device, "^.*_", ""))
 head(df_window1)
 
 ggplot(df_window1, aes(x=time,y=RMSSD)) +
   geom_path(aes(group=Device)) +
-  facet_wrap(~Device) 
+  facet_wrap(~Device) +
+  ylab("RMSSD in ms")
 ```
 
 # Take a segment of rr-interval for 20s between 500-1000ms from MB, for inspection of algorithm
@@ -415,8 +445,8 @@ write_csv(test.data.mb, "test_data_mb.csv")
 
 # Analyze HRV via the frequency domain
 
-HRV, especially the high frequency components, is regulated by parasympathetic activity from the vagus nerve; only parasympathetic action can mediate the rapid changes accompanying such high frequency variation.
+HRV, especially the high frequency components, is regulated by parasympathetic activity from the vagus nerve; only parasympathetic action can mediate the rapid changes accompanying such high frequency variation. Plan to use RHRV package for analysis, to be continued.
 
 ```{r}
-# transform <- fft(df_mb$Reconstructed)
+library(RHRV)
 ```
