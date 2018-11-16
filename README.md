@@ -9,7 +9,7 @@ For full details, refer to the paper (Kos et al., 2017) https://ieeexplore.ieee.
 
 ### Data collection
 
-Data on interbeat intervals (also known as RR intervals), denoting time between successive heart beats, are collected from wrist devices (Empathica 4, E4, and Microsoft Band 2, MB), and ECG, used as the gold standard to compare measurements, from 9 healthy participants. 
+Data on interbeat intervals (also known as RR intervals), denoting time between successive heart beats, are collected from wrist sensors (Empathica 4, E4, and Microsoft Band 2, MB), and ECG, used as the gold standard to compare measurements, from 9 healthy participants. 
 
 ### Algorithm development
 
@@ -21,7 +21,7 @@ For full details, refer to the poster (Kos et al., 2017) https://www.researchgat
 
 ## Evaluation & Conclusion
 
-After implementing the data cleaning algorithm, the RR interval of wrist devices was correlated with that of ECG. The cleaned data had 10% higher correlation with ECG than the raw data, indicating that the algorithm improves heart rate estimates by 10%.
+After implementing the data cleaning algorithm, the RR interval of data from wrist sensors was correlated with that of ECG. The cleaned data had 10% higher correlation with ECG than the raw data, indicating that the algorithm improves heart rate estimates by 10%.
 
 ## Future work
 
