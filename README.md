@@ -1,5 +1,7 @@
 ## Project involves developing an algorithm to remove noise from heart rate data collected from wrist sensors, in order to better estimate stress. 
 
+**In collaboration with Northeastern University Health Behavior Informatics Lab** https://hbi.ccs.neu.edu/
+
 ## To download repository
 - ```git clone https://github.com/tjeng/HRV_analysis.git``` 
 
